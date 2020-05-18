@@ -2,7 +2,7 @@ package com.ryota0624.chat
 
 import com.ryota0624.user.User
 
-// ChatRoom はChatをするための空間です。
+// ChatRoom は会話をするための空間です。
 trait ChatRoom {
 
   import com.ryota0624.chat.ChatRoom._
@@ -15,18 +15,17 @@ trait ChatRoom {
 
   def maxUserCount: Int
 
-  def textCount: Int
-
   def startConversation(text: Text): Conversation
+
+  def join(user: User): Conversation
+
+  def joined: Seq[User.ID]
 }
 
 object ChatRoom {
-  private val maxTextCount = 1000
-
   class Title(private val value: String)
 
   class ID(private val value: String)
-
 }
 
 // Conversation は会話です。
@@ -53,6 +52,7 @@ object Conversation {
 
 }
 
+// Text は会話中の発言です。
 trait Text {
 
   import Text._
