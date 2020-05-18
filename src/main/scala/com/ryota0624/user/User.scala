@@ -68,7 +68,7 @@ object AnonymousUser {
   def apply(): AnonymousUser = new AnonymousUser(User.ID.generate(), generateRandomName())
 
   def generateRandomName(): User.Name = {
-    User.Name(pickRandomNameColor ++ "色な" ++ pickRandomNameAnimal)
+    User.Name(pickRandomNameColor ++ "色の" ++ pickRandomNameAnimal)
   }
 
   private def pickRandomNameColor = nameVariationColor(scala.util.Random.nextInt(nameVariationColor.size))
