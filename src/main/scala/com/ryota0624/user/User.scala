@@ -1,8 +1,12 @@
 package com.ryota0624.user
 
-import com.ryota0624.{CanBeEncrypted, Encrypted}
+import java.time.LocalDateTime
 
-import scala.concurrent.ExecutionContext
+import akka.actor.ActorRef
+import akka.actor.typed.Behavior
+import akka.actor.typed.eventstream.EventStream
+import akka.actor.typed.scaladsl.Behaviors
+import com.ryota0624.{CanBeEncrypted, Encrypted}
 
 
 // Userはchat appの利用者です。
@@ -13,6 +17,8 @@ trait User {
   def id: ID
 
   def name: Name
+
+  def status: Status
 }
 
 object User {
@@ -25,6 +31,11 @@ object User {
     def generate(): ID = ID(java.util.UUID.randomUUID().toString)
   }
 
+  sealed trait Status
+
+  case object Active extends Status
+
+  case class Deleted(at: LocalDateTime) extends Status
 
   class Name(private val name: String)
 
@@ -36,36 +47,137 @@ object User {
 
 
 // LoggedInUser はログインした利用者です。
-class LoggedInUser(
-                    val id: User.ID,
-                    val name: User.Name,
-                    val email: LoggedInUser.Email,
-                    val encryptedPassword: LoggedInUser.EncryptedPassword,
-                  ) extends User
+case class LoggedInUser(
+                         id: User.ID,
+                         name: User.Name,
+                         email: LoggedInUser.Email,
+                         password: LoggedInUser.Password,
+                         status: User.Status,
+                       ) extends User {
+
+  import com.ryota0624.user.LoggedInUser._
+
+  def updateEmail(newEmail: Email, newPassword: Password): Either[InvalidLoginInfo, LoggedInUser] = {
+    if (password != newPassword) Left(InvalidLoginInfo("password does not match"))
+    else Right(copy(email = newEmail))
+  }
+
+  def delete(inputEmail: Email, inputPassword: Password, deletedAt: LocalDateTime): Either[InvalidLoginInfo, LoggedInUser] = {
+    if (inputEmail == email && inputPassword == password) Right(copy(status = User.Deleted(deletedAt)))
+    else Left(InvalidLoginInfo("password or email does not match"))
+  }
+}
 
 object LoggedInUser {
+
+  sealed trait Status
+
+  case object Active extends Status
+
+  case class Deleted(at: LocalDateTime) extends Status
+
+  sealed trait ValidationError
+
+  case class InvalidLoginInfo(message: String) extends ValidationError
+
+  sealed trait LoggedInUserCommand {
+    def id: User.ID
+
+    def sender: ActorRef
+  }
+
+  final case class UpdateEmail(
+                                id: User.ID,
+                                email: LoggedInUser.Email,
+                                password: Password,
+                                sender: ActorRef,
+                              ) extends LoggedInUserCommand
+
+  final case class Delete(
+                           id: User.ID,
+                           email: LoggedInUser.Email,
+                           password: LoggedInUser.Password,
+                           sender: ActorRef,
+                         ) extends LoggedInUserCommand
+
+  sealed trait LoggedInUserResponse {
+    def id: User.ID
+  }
+
+  case class UserCommandResponse(id: User.ID, validationError: Option[ValidationError])
+
+  object UserCommandResponse {
+    def success(id: User.ID): UserCommandResponse = new UserCommandResponse(id, None)
+
+    def failure(id: User.ID, validationError: ValidationError): UserCommandResponse = new UserCommandResponse(id, Some(validationError))
+
+  }
+
+  sealed trait LoggedInUserEvent {
+    def id: User.ID
+  }
+
+  final case class EmailUpdated(
+                                 id: User.ID,
+                                 email: LoggedInUser.Email,
+                               ) extends LoggedInUserEvent
+
+  final case class UserDeleted(
+                                id: User.ID,
+                              ) extends LoggedInUserEvent
+
+  import akka.actor._
+
+  private def run(user: LoggedInUser): Behavior[LoggedInUserCommand] =
+    Behaviors.receive { (ctx, message) =>
+      if (message.id == user.id) message match {
+        case UpdateEmail(_, email, password, sender) =>
+          user.updateEmail(email, password) match {
+            case Left(validationError: ValidationError) =>
+              sender ! UserCommandResponse.failure(user.id, validationError)
+              Behaviors.same
+            case Right(updated) =>
+              val evt = EmailUpdated(updated.id, updated.email)
+              sender ! UserCommandResponse.success(user.id)
+              ctx.system.eventStream.tell(EventStream.Publish(evt))
+              run(updated)
+          }
+        case Delete(_, email, password, sender) =>
+          user.delete(email, password, LocalDateTime.now /* TODO diした時刻からとる */) match {
+            case Left(validationError: ValidationError) =>
+              sender ! UserCommandResponse.failure(user.id, validationError)
+              Behaviors.same
+            case Right(updated) =>
+              val evt = UserDeleted(updated.id)
+              sender ! UserCommandResponse.success(user.id)
+              ctx.system.eventStream.tell(EventStream.Publish(evt))
+              run(user)
+          }
+      } else Behaviors.same
+    }
 
   class Email(private val value: String)
 
   class Password(private val plainText: String) extends CanBeEncrypted {
-    override def toPlainText: String = plainText
+    protected override def toPlainText: String = plainText
   }
 
   class EncryptedPassword(private val value: String) extends Encrypted[Password] {
-    override def decrypt(ctx: ExecutionContext): Password = ???
+    override def decrypt(): Password = ???
   }
 
 }
 
 // AnonymousUser はログインしていない利用者です。
-class AnonymousUser(
-                     val id: User.ID,
-                     val name: User.Name,
-                   ) extends User
+case class AnonymousUser(
+                          id: User.ID,
+                          name: User.Name,
+                          status: User.Status,
+                        ) extends User
 
 object AnonymousUser {
 
-  def apply(): AnonymousUser = new AnonymousUser(User.ID.generate(), generateRandomName())
+  def apply(): AnonymousUser = new AnonymousUser(User.ID.generate(), generateRandomName(), User.Active)
 
   def generateRandomName(): User.Name = {
     User.Name(pickRandomNameColor ++ "色の" ++ pickRandomNameAnimal)

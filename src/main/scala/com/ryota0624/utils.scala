@@ -3,11 +3,11 @@ package com.ryota0624
 import scala.concurrent.{ExecutionContext, Future}
 
 trait Encrypted[Decrypted] {
-  def decrypt(ctx: ExecutionContext): Decrypted
+  def decrypt(): Decrypted
 }
 
 trait CanBeEncrypted {
-  def toPlainText: String
+  protected def toPlainText: String
 }
 
 trait CryptoService {
