@@ -20,3 +20,10 @@ trait ApplicationTime {
   def now(): LocalDateTime
 }
 
+object ApplicationTimeImpl extends ApplicationTime {
+  def now(): LocalDateTime = LocalDateTime.now()
+}
+
+object ApplicationTime {
+  def apply(): ApplicationTime = ApplicationTimeImpl
+}

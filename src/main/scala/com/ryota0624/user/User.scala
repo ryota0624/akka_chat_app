@@ -212,21 +212,24 @@ case class Users(anonymousUsers: Seq[AnonymousUser], loggedInUsers: Map[User.ID,
 
 object Users {
 
+  def apply()(implicit applicationTime: ApplicationTime): Behavior[Command] =
+    run(new Users(Seq.empty, Map.empty))
+
   import LoggedInUser._
 
-  sealed trait UsersCommand
+  sealed trait Command
 
   case class RegisterUser(name: User.Name, email: Email, password: Password)
 
   case class WrappedLoggedInUserCommand(cmd: LoggedInUser.LoggedInUserCommand)
 
-  case object RegisterAnonymousUser extends UsersCommand
+  case object RegisterAnonymousUser extends Command
 
   sealed trait UsersEvent
 
   case class UserRegistered(id: User.ID) extends UsersEvent
 
-  private def run(users: Users)(implicit t: ApplicationTime): Behavior[UsersCommand] = Behaviors.receive {
+  private def run(users: Users)(implicit t: ApplicationTime): Behavior[Command] = Behaviors.receive {
     (ctx, message) =>
       message match {
         case RegisterUser(name, email, password) =>
