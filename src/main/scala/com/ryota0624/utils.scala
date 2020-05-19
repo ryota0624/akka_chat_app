@@ -1,5 +1,7 @@
 package com.ryota0624
 
+import java.time.LocalDateTime
+
 import scala.concurrent.{ExecutionContext, Future}
 
 trait Encrypted[Decrypted] {
@@ -14,5 +16,7 @@ trait CryptoService {
   def crypto[I: CanBeEncrypted, O: Encrypted[I]](ctx: ExecutionContext, value: I): Future[O]
 }
 
-
+trait ApplicationTime {
+  def now(): LocalDateTime
+}
 

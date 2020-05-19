@@ -2,11 +2,11 @@ package com.ryota0624.user
 
 import java.time.LocalDateTime
 
-import akka.actor.ActorRef
-import akka.actor.typed.Behavior
+import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.eventstream.EventStream
 import akka.actor.typed.scaladsl.Behaviors
-import com.ryota0624.{CanBeEncrypted, Encrypted}
+import com.ryota0624.user.LoggedInUser.LoggedInUserCommand
+import com.ryota0624.{ApplicationTime, CanBeEncrypted, Encrypted}
 
 
 // Userはchat appの利用者です。
@@ -23,7 +23,9 @@ trait User {
 
 object User {
 
-  class ID(private val value: String)
+  class ID(private val value: String) {
+    override def toString: String = value
+  }
 
   object ID {
     def apply(value: String): User.ID = new ID(value)
@@ -70,34 +72,32 @@ case class LoggedInUser(
 
 object LoggedInUser {
 
-  sealed trait Status
-
-  case object Active extends Status
-
-  case class Deleted(at: LocalDateTime) extends Status
+  def name(id: User.ID): String = s"logged_in_user/${id.toString}"
 
   sealed trait ValidationError
 
   case class InvalidLoginInfo(message: String) extends ValidationError
 
+  case object NotFoundUser extends ValidationError
+
   sealed trait LoggedInUserCommand {
     def id: User.ID
 
-    def sender: ActorRef
+    def sender: ActorRef[UserCommandResponse]
   }
 
   final case class UpdateEmail(
                                 id: User.ID,
                                 email: LoggedInUser.Email,
                                 password: Password,
-                                sender: ActorRef,
+                                sender: ActorRef[UserCommandResponse],
                               ) extends LoggedInUserCommand
 
   final case class Delete(
                            id: User.ID,
                            email: LoggedInUser.Email,
                            password: LoggedInUser.Password,
-                           sender: ActorRef,
+                           sender: ActorRef[UserCommandResponse],
                          ) extends LoggedInUserCommand
 
   sealed trait LoggedInUserResponse {
@@ -110,7 +110,6 @@ object LoggedInUser {
     def success(id: User.ID): UserCommandResponse = new UserCommandResponse(id, None)
 
     def failure(id: User.ID, validationError: ValidationError): UserCommandResponse = new UserCommandResponse(id, Some(validationError))
-
   }
 
   sealed trait LoggedInUserEvent {
@@ -122,13 +121,15 @@ object LoggedInUser {
                                  email: LoggedInUser.Email,
                                ) extends LoggedInUserEvent
 
-  final case class UserDeleted(
-                                id: User.ID,
-                              ) extends LoggedInUserEvent
+  final case class Deleted(
+                            id: User.ID,
+                          ) extends LoggedInUserEvent
 
-  import akka.actor._
+  def apply(id: User.ID, name: User.Name, email: Email, password: Password)
+           (implicit applicationTime: ApplicationTime): Behavior[LoggedInUserCommand] =
+    run(new LoggedInUser(id, name, email, password, User.Active))
 
-  private def run(user: LoggedInUser): Behavior[LoggedInUserCommand] =
+  private def run(user: LoggedInUser)(implicit applicationTime: ApplicationTime): Behavior[LoggedInUserCommand] =
     Behaviors.receive { (ctx, message) =>
       if (message.id == user.id) message match {
         case UpdateEmail(_, email, password, sender) =>
@@ -143,12 +144,12 @@ object LoggedInUser {
               run(updated)
           }
         case Delete(_, email, password, sender) =>
-          user.delete(email, password, LocalDateTime.now /* TODO diした時刻からとる */) match {
+          user.delete(email, password, applicationTime.now()) match {
             case Left(validationError: ValidationError) =>
               sender ! UserCommandResponse.failure(user.id, validationError)
               Behaviors.same
             case Right(updated) =>
-              val evt = UserDeleted(updated.id)
+              val evt = Deleted(updated.id)
               sender ! UserCommandResponse.success(user.id)
               ctx.system.eventStream.tell(EventStream.Publish(evt))
               run(user)
@@ -177,7 +178,7 @@ case class AnonymousUser(
 
 object AnonymousUser {
 
-  def apply(): AnonymousUser = new AnonymousUser(User.ID.generate(), generateRandomName(), User.Active)
+  def apply(id: User.ID): AnonymousUser = new AnonymousUser(id, generateRandomName(), User.Active)
 
   def generateRandomName(): User.Name = {
     User.Name(pickRandomNameColor ++ "色の" ++ pickRandomNameAnimal)
@@ -201,4 +202,50 @@ object AnonymousUser {
     "ねずみ",
     "トナカイ"
   )
+}
+
+case class Users(anonymousUsers: Seq[AnonymousUser], loggedInUsers: Map[User.ID, ActorRef[LoggedInUserCommand]]) {
+  def registerUser(id: User.ID, userRef: ActorRef[LoggedInUserCommand]): Users = copy(loggedInUsers = loggedInUsers + ((id, userRef)))
+
+  def addAnonymousUser(anonymousUser: AnonymousUser): Users = copy(anonymousUsers = anonymousUsers :+ anonymousUser)
+}
+
+object Users {
+
+  import LoggedInUser._
+
+  sealed trait UsersCommand
+
+  case class RegisterUser(name: User.Name, email: Email, password: Password)
+
+  case class WrappedLoggedInUserCommand(cmd: LoggedInUser.LoggedInUserCommand)
+
+  case object RegisterAnonymousUser extends UsersCommand
+
+  sealed trait UsersEvent
+
+  case class UserRegistered(id: User.ID) extends UsersEvent
+
+  private def run(users: Users)(implicit t: ApplicationTime): Behavior[UsersCommand] = Behaviors.receive {
+    (ctx, message) =>
+      message match {
+        case RegisterUser(name, email, password) =>
+          val id = User.ID.generate()
+          val user = LoggedInUser(id, name, email, password)
+          val userRef = ctx.spawn(user, LoggedInUser.name(id))
+          val evt = UserRegistered(id)
+          ctx.system.eventStream.tell(EventStream.Publish(evt))
+          run(users.registerUser(id, userRef))
+        case WrappedLoggedInUserCommand(command) =>
+          users.loggedInUsers.get(command.id) match {
+            case Some(user) => user.tell(command)
+            case None => command.sender ! UserCommandResponse.failure(command.id, LoggedInUser.NotFoundUser)
+          }
+          Behaviors.same
+        case RegisterAnonymousUser =>
+          val id = User.ID.generate()
+          val user = AnonymousUser(id)
+          run(users.addAnonymousUser(user))
+      }
+  }
 }
