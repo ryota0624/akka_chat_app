@@ -13,7 +13,7 @@ trait CanBeEncrypted {
 }
 
 trait CryptoService {
-  def crypto[I: CanBeEncrypted, O: Encrypted[I]](ctx: ExecutionContext, value: I): Future[O]
+  def crypto(ctx: ExecutionContext, value: CanBeEncrypted): Future[Encrypted[_]]
 }
 
 trait ApplicationTime {

@@ -72,7 +72,7 @@ case class LoggedInUser(
 
 object LoggedInUser {
 
-  def name(id: User.ID): String = s"logged_in_user/${id.toString}"
+  def name(id: User.ID): String = s"${id.toString}"
 
   sealed trait ValidationError
 
@@ -219,9 +219,9 @@ object Users {
 
   sealed trait Command
 
-  case class RegisterUser(name: User.Name, email: Email, password: Password)
+  case class RegisterUser(name: User.Name, email: Email, password: Password) extends Command
 
-  case class WrappedLoggedInUserCommand(cmd: LoggedInUser.LoggedInUserCommand)
+  case class WrappedLoggedInUserCommand(cmd: LoggedInUser.LoggedInUserCommand) extends Command
 
   case object RegisterAnonymousUser extends Command
 

@@ -3,15 +3,17 @@ package com.ryota0624.application
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.Behavior
 import akka.actor.typed.scaladsl.Behaviors
-import com.ryota0624.ApplicationTime
+import com.ryota0624.{ApplicationTime, user}
 import com.ryota0624.chat.ChatRooms
-import com.ryota0624.user.Users
+import com.ryota0624.user.{LoggedInUser, User, Users}
 
 
 object ChatApplication {
 
   sealed trait Command
-  final case class UsersCommand(command: Users.Command)extends Command
+
+  final case class UsersCommand(command: Users.Command) extends Command
+
   final case class ChatRoomsCommand(command: ChatRooms.Command) extends Command
 
   def apply()(implicit time: ApplicationTime): Behavior[Command] = Behaviors.setup { context =>
@@ -29,7 +31,15 @@ object ChatApplication {
   }
 }
 
-class CommandLine extends App {
+object CommandLine extends App {
   implicit val applicationTime: ApplicationTime = ApplicationTime()
   val main: ActorSystem[ChatApplication.Command] = ActorSystem(ChatApplication(), "ChatApplication")
+
+  main ! ChatApplication.UsersCommand(Users.RegisterAnonymousUser)
+  main ! ChatApplication.UsersCommand(Users.RegisterAnonymousUser)
+  main ! ChatApplication.UsersCommand(Users.RegisterUser(
+    User.Name("suzuki"),
+    new LoggedInUser.Email("hoge"),
+    new user.LoggedInUser.Password("huga"))
+  )
 }

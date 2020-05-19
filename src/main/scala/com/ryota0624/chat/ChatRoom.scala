@@ -25,7 +25,7 @@ case class ChatRoom(
 }
 
 object ChatRoom {
-  def name(id: ID) = s"chat_room/${id.toString}"
+  def name(id: ID) = s"${id.toString}"
 
   def apply(id: ID, ownerID: User.ID, title: Title): Behavior[Command] =
     run(new ChatRoom(id, ownerID, title, Seq(ownerID), Map.empty))
@@ -60,7 +60,7 @@ object ChatRoom {
 
   final case class StartConversation(chatRoomID: ChatRoom.ID, text: Text) extends Command
 
-  final case class WrappedConversationResponse(chatRoomID: ID, response: Conversation.Response) extends Command
+//  final case class WrappedConversationResponse(chatRoomID: ID, response: Conversation.Response) extends Command
 
   private def run(chatRoom: ChatRoom): Behavior[Command] = {
     Behaviors.receive {
@@ -101,7 +101,7 @@ case class Conversation(
 
 object Conversation {
 
-  def name(id: ID) = s"conversations/${id.toString}"
+  def name(id: ID) = s"${id.toString}"
 
   sealed trait Command {
     def conversationID: Conversation.ID

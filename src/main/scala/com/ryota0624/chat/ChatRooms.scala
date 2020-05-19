@@ -21,7 +21,8 @@ object ChatRooms {
     Behaviors.receiveMessage {
       case CreateChatRoom(ownerID, title) =>
         val roomID = ChatRoom.ID()
-        val chatRoomRef = ChatRoom(roomID, ownerID, title)
+        val chatRoom = ChatRoom(roomID, ownerID, title)
+        val chatRoomRef = context.spawn(chatRoom, ChatRoom.name(roomID))
         context.system.eventStream.tell(EventStream.Publish(ChatRoomCreated(roomID)))
         apply(chatRooms + ((roomID, chatRoomRef)))
       case WrappedChatRoomCommand(command) =>
