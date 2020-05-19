@@ -228,6 +228,7 @@ object Users {
   sealed trait UsersEvent
 
   case class UserRegistered(id: User.ID) extends UsersEvent
+  case class AnonymousUserRegistered(id: User.ID) extends UsersEvent
 
   private def run(users: Users)(implicit t: ApplicationTime): Behavior[Command] = Behaviors.receive {
     (ctx, message) =>
@@ -248,6 +249,8 @@ object Users {
         case RegisterAnonymousUser =>
           val id = User.ID.generate()
           val user = AnonymousUser(id)
+          val evt = AnonymousUserRegistered(id)
+          ctx.system.eventStream.tell(EventStream.Publish(evt))
           run(users.addAnonymousUser(user))
       }
   }

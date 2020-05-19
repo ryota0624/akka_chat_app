@@ -1,8 +1,10 @@
 package com.ryota0624.chat
 
+import akka.actor.typed.eventstream.EventStream.Publish
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
 import com.ryota0624.chat.ChatRoom.Title
+import com.ryota0624.chat.Conversation.TextAdded
 import com.ryota0624.user.User
 
 // ChatRoom は会話をするための空間です。
@@ -13,10 +15,11 @@ case class ChatRoom(
                      joined: Seq[User.ID],
                      conversations: Map[Conversation.ID, ActorRef[Conversation.Command]]
                    ) {
-  def startConversation(text: Text)(implicit actorCtx: ActorContext[_]): ChatRoom = {
+  def startConversation(text: Text)(implicit actorCtx: ActorContext[_]): (ChatRoom, ChatRoom.ConversationStarted) = {
     val conversationID = Conversation.ID()
-    val conversationRef = actorCtx.spawn(Conversation(conversationID, id, text.typedFrom, text), Conversation.name(conversationID))
-    copy(conversations = conversations + ((conversationID, conversationRef)))
+    val ownerID = text.typedFrom
+    val conversationRef = actorCtx.spawn(Conversation(conversationID, id, ownerID, text), Conversation.name(conversationID))
+    (copy(conversations = conversations + ((conversationID, conversationRef))), ChatRoom.ConversationStarted(id, conversationID, ownerID, text))
   }
 
   def join(id: User.ID): ChatRoom = {
@@ -60,14 +63,24 @@ object ChatRoom {
 
   final case class StartConversation(chatRoomID: ChatRoom.ID, text: Text) extends Command
 
-//  final case class WrappedConversationResponse(chatRoomID: ID, response: Conversation.Response) extends Command
+  sealed trait Event
+
+  final case class ConversationStarted(
+                                        chatRoomID: ChatRoom.ID,
+                                        conversationID: Conversation.ID,
+                                        ownerID: User.ID,
+                                        text: Text,
+                                      )
+
+  //  final case class WrappedConversationResponse(chatRoomID: ID, response: Conversation.Response) extends Command
 
   private def run(chatRoom: ChatRoom): Behavior[Command] = {
     Behaviors.receive {
       (actorCtx, message) =>
         if (message.chatRoomID == chatRoom.id) message match {
           case StartConversation(_, text) =>
-            val updatedChatRoom = chatRoom.startConversation(text)(actorCtx)
+            val (updatedChatRoom, evt) = chatRoom.startConversation(text)(actorCtx)
+            actorCtx.system.eventStream.tell(Publish(evt))
             run(updatedChatRoom)
           case AddText(_, conversationID, text, sender) =>
             chatRoom.conversations.get(conversationID) match {
@@ -93,9 +106,9 @@ case class Conversation(
                          root: Text,
                          childrenTexts: Seq[Text],
                        ) {
-  def addText(text: Text): Conversation = {
+  def addText(text: Text): (Conversation, TextAdded) = {
     val updatedParticipants = participants + text.typedFrom ++ text.mentionedTo
-    copy(childrenTexts = childrenTexts :+ text, participants = updatedParticipants)
+    (copy(childrenTexts = childrenTexts :+ text, participants = updatedParticipants), TextAdded(roomID, id, text))
   }
 }
 
@@ -119,6 +132,14 @@ object Conversation {
 
   final case class AddText(conversationID: Conversation.ID, text: Text) extends Command
 
+  sealed trait Event
+
+  final case class TextAdded(
+                              chatRoomID: ChatRoom.ID,
+                              conversationID: Conversation.ID,
+                              text: Text,
+                            )
+
   class ID(private val value: String) {
     override def toString: String = value
   }
@@ -132,11 +153,12 @@ object Conversation {
            ): Behavior[Command] = run(new Conversation(id, roomID, ownerID, Set(ownerID), root, childrenTexts = Nil))
 
   private def run(conversation: Conversation): Behavior[Command] = Behaviors.receive {
-    (_, message) =>
+    (ctx, message) =>
       if (conversation.id == message.conversationID) message match {
         case AddText(_, text) =>
-          val updated = conversation.addText(text)
+          val (updated, evt) = conversation.addText(text)
           //          // TODO validation
+          ctx.system.eventStream.tell(Publish(evt))
           //          sender ! Response.success(message.conversationID)
           run(updated)
       }
