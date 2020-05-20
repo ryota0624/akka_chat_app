@@ -4,7 +4,7 @@ import java.time.LocalDateTime
 
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.eventstream.EventStream
-import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
 import com.ryota0624.user.LoggedInUser.LoggedInUserCommand
 import com.ryota0624.{ApplicationTime, CanBeEncrypted, Encrypted}
 
@@ -59,15 +59,33 @@ case class LoggedInUser(
 
   import com.ryota0624.user.LoggedInUser._
 
-  def updateEmail(newEmail: Email, newPassword: Password): Either[InvalidLoginInfo, LoggedInUser] = {
+  def updateEmail(newEmail: Email, newPassword: Password): Either[InvalidLoginInfo, (LoggedInUser, EmailUpdated)] = {
     if (password != newPassword) Left(InvalidLoginInfo("password does not match"))
-    else Right(copy(email = newEmail))
+    else {
+      val evt = EmailUpdated(id, newEmail)
+      Right(apply(evt), evt)
+    }
   }
 
-  def delete(inputEmail: Email, inputPassword: Password, deletedAt: LocalDateTime): Either[InvalidLoginInfo, LoggedInUser] = {
-    if (inputEmail == email && inputPassword == password) Right(copy(status = User.Deleted(deletedAt)))
-    else Left(InvalidLoginInfo("password or email does not match"))
+  def delete(inputEmail: Email, inputPassword: Password, deletedAt: LocalDateTime): Either[InvalidLoginInfo, (LoggedInUser, Deleted)] = {
+    if (inputEmail == email && inputPassword == password) {
+      val evt = Deleted(id, deletedAt)
+      Right((apply(evt), evt))
+    } else Left(InvalidLoginInfo("password or email does not match"))
   }
+
+  def apply(evt: LoggedInUserEvent): LoggedInUser = {
+    evt match {
+      case evt: EmailUpdated => applyEmailUpdated(evt)
+      case evt: Deleted => applyDeleted(evt)
+    }
+  }
+
+  private def applyEmailUpdated(evt: EmailUpdated) =
+    copy(email = evt.email)
+
+  private def applyDeleted(evt: Deleted) =
+    copy(status = User.Deleted(evt.at))
 }
 
 object LoggedInUser {
@@ -100,6 +118,9 @@ object LoggedInUser {
                            sender: ActorRef[UserCommandResponse],
                          ) extends LoggedInUserCommand
 
+  case class Activate(id: User.ID, name: User.Name, email: Email, password: Password, sender: ActorRef[UserCommandResponse]) extends LoggedInUserCommand
+
+
   sealed trait LoggedInUserResponse {
     def id: User.ID
   }
@@ -123,11 +144,33 @@ object LoggedInUser {
 
   final case class Deleted(
                             id: User.ID,
+                            at: LocalDateTime,
                           ) extends LoggedInUserEvent
 
-  def apply(id: User.ID, name: User.Name, email: Email, password: Password)
+
+  def apply(ctx: ActorContext[UserCommandResponse], id: User.ID, name: User.Name, email: Email, password: Password)
+           (implicit applicationTime: ApplicationTime): ActorRef[LoggedInUserCommand] = {
+    val user = apply()
+    val ref = ctx.spawn(user, LoggedInUser.name(id))
+    ref ! Activate(id, name, email, password, ctx.self)
+    ref
+  }
+
+  def apply()
            (implicit applicationTime: ApplicationTime): Behavior[LoggedInUserCommand] =
-    run(new LoggedInUser(id, name, email, password, User.Active))
+    waitActivate()
+
+  private def waitActivate()(implicit applicationTime: ApplicationTime): Behavior[LoggedInUserCommand] =
+    Behaviors.receive { (ctx, message) =>
+      message match {
+        case Activate(id, name, email, password, sender) =>
+          sender ! UserCommandResponse.success(id)
+          run(new LoggedInUser(id, name, email, password, User.Active))
+        case _ =>
+          ctx.log.warn("invalid msg received")
+          Behaviors.ignore
+      }
+    }
 
   private def run(user: LoggedInUser)(implicit applicationTime: ApplicationTime): Behavior[LoggedInUserCommand] =
     Behaviors.receive { (ctx, message) =>
@@ -137,10 +180,9 @@ object LoggedInUser {
             case Left(validationError: ValidationError) =>
               sender ! UserCommandResponse.failure(user.id, validationError)
               Behaviors.same
-            case Right(updated) =>
-              val evt = EmailUpdated(updated.id, updated.email)
-              sender ! UserCommandResponse.success(user.id)
+            case Right((updated, evt)) =>
               ctx.system.eventStream.tell(EventStream.Publish(evt))
+              sender ! UserCommandResponse.success(user.id)
               run(updated)
           }
         case Delete(_, email, password, sender) =>
@@ -148,12 +190,14 @@ object LoggedInUser {
             case Left(validationError: ValidationError) =>
               sender ! UserCommandResponse.failure(user.id, validationError)
               Behaviors.same
-            case Right(updated) =>
-              val evt = Deleted(updated.id)
-              sender ! UserCommandResponse.success(user.id)
+            case Right((updated, evt)) =>
               ctx.system.eventStream.tell(EventStream.Publish(evt))
+              sender ! UserCommandResponse.success(updated.id)
               run(user)
           }
+        case _: Activate =>
+          ctx.log.warn("invalid msg received")
+          Behaviors.ignore
       } else Behaviors.same
     }
 
@@ -228,6 +272,7 @@ object Users {
   sealed trait UsersEvent
 
   case class UserRegistered(id: User.ID) extends UsersEvent
+
   case class AnonymousUserRegistered(id: User.ID) extends UsersEvent
 
   private def run(users: Users)(implicit t: ApplicationTime): Behavior[Command] = Behaviors.receive {
@@ -235,10 +280,8 @@ object Users {
       message match {
         case RegisterUser(name, email, password) =>
           val id = User.ID.generate()
-          val user = LoggedInUser(id, name, email, password)
-          val userRef = ctx.spawn(user, LoggedInUser.name(id))
-          val evt = UserRegistered(id)
-          ctx.system.eventStream.tell(EventStream.Publish(evt))
+          val userRef = LoggedInUser(???, id, name, email, password)
+          ctx.system.eventStream.tell(EventStream.Publish(UserRegistered(id)))
           run(users.registerUser(id, userRef))
         case WrappedLoggedInUserCommand(command) =>
           users.loggedInUsers.get(command.id) match {
