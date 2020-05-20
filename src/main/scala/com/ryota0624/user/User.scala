@@ -2,11 +2,15 @@ package com.ryota0624.user
 
 import java.time.LocalDateTime
 
-import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.eventstream.EventStream
-import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.{ActorRef, Behavior}
+import akka.util.Timeout
 import com.ryota0624.user.LoggedInUser.LoggedInUserCommand
 import com.ryota0624.{ApplicationTime, CanBeEncrypted, Encrypted}
+
+import scala.concurrent.duration._
+import scala.util.{Failure, Success}
 
 
 // Userはchat appの利用者です。
@@ -121,10 +125,6 @@ object LoggedInUser {
   case class Activate(id: User.ID, name: User.Name, email: Email, password: Password, sender: ActorRef[UserCommandResponse]) extends LoggedInUserCommand
 
 
-  sealed trait LoggedInUserResponse {
-    def id: User.ID
-  }
-
   case class UserCommandResponse(id: User.ID, validationError: Option[ValidationError])
 
   object UserCommandResponse {
@@ -146,15 +146,6 @@ object LoggedInUser {
                             id: User.ID,
                             at: LocalDateTime,
                           ) extends LoggedInUserEvent
-
-
-  def apply(ctx: ActorContext[UserCommandResponse], id: User.ID, name: User.Name, email: Email, password: Password)
-           (implicit applicationTime: ApplicationTime): ActorRef[LoggedInUserCommand] = {
-    val user = apply()
-    val ref = ctx.spawn(user, LoggedInUser.name(id))
-    ref ! Activate(id, name, email, password, ctx.self)
-    ref
-  }
 
   def apply()
            (implicit applicationTime: ApplicationTime): Behavior[LoggedInUserCommand] =
@@ -267,6 +258,8 @@ object Users {
 
   case class WrappedLoggedInUserCommand(cmd: LoggedInUser.LoggedInUserCommand) extends Command
 
+  case class WrappedLoggedInUserResponse(response: UserCommandResponse) extends Command
+
   case object RegisterAnonymousUser extends Command
 
   sealed trait UsersEvent
@@ -275,26 +268,43 @@ object Users {
 
   case class AnonymousUserRegistered(id: User.ID) extends UsersEvent
 
+  implicit val askTimeout: Timeout = Timeout(2.second)
+
   private def run(users: Users)(implicit t: ApplicationTime): Behavior[Command] = Behaviors.receive {
-    (ctx, message) =>
+    (ctx, message) => {
+      // val loggedInUserResponseAdapter = ctx.messageAdapter(WrappedLoggedInUserResponse)
+
       message match {
         case RegisterUser(name, email, password) =>
           val id = User.ID.generate()
-          val userRef = LoggedInUser(???, id, name, email, password)
-          ctx.system.eventStream.tell(EventStream.Publish(UserRegistered(id)))
-          run(users.registerUser(id, userRef))
-        case WrappedLoggedInUserCommand(command) =>
-          users.loggedInUsers.get(command.id) match {
-            case Some(user) => user.tell(command)
-            case None => command.sender ! UserCommandResponse.failure(command.id, LoggedInUser.NotFoundUser)
+          val user = LoggedInUser()
+          val userRef = ctx.spawn(user, LoggedInUser.name(id))
+          ctx.ask[LoggedInUserCommand, UserCommandResponse](userRef, Activate(id, name, email, password, _)) {
+            case Failure(exception) =>
+              // TODO senderに返してやる
+              ctx.log.error(s"failure! $exception", exception)
+              ???
+            case Success(value) =>
+              ctx.log.info(s"response! $value")
+              WrappedLoggedInUserResponse(value)
           }
-          Behaviors.same
+          ctx.system.eventStream ! EventStream.Publish(UserRegistered(id))
+          run(users.registerUser(id, userRef))
         case RegisterAnonymousUser =>
           val id = User.ID.generate()
           val user = AnonymousUser(id)
           val evt = AnonymousUserRegistered(id)
           ctx.system.eventStream.tell(EventStream.Publish(evt))
           run(users.addAnonymousUser(user))
+        case WrappedLoggedInUserResponse(_) =>
+          Behaviors.ignore
+        case WrappedLoggedInUserCommand(command) =>
+          users.loggedInUsers.get(command.id) match {
+            case Some(user) => user ! command
+            case None => command.sender ! UserCommandResponse.failure(command.id, LoggedInUser.NotFoundUser)
+          }
+          Behaviors.same
       }
+    }
   }
 }
