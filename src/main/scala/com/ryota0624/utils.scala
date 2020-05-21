@@ -30,7 +30,7 @@ object ApplicationTime {
   def apply(): ApplicationTime = ApplicationTimeImpl
 }
 
-trait ReplayableCommand[D >: ReplayDocument] {
+trait ReplayableCommand[D <: ReplayDocument] {
   def replayTo: ActorRef[Response[D]]
 }
 
@@ -38,9 +38,9 @@ trait ValidationError
 
 trait ReplayDocument
 
-sealed trait Response[D >: ReplayDocument]
+sealed trait Response[+D <: ReplayDocument]
 
 object Response {
-  final case class Failure(error: ValidationError) extends Response[Any]
-  final case class Success[T >: ReplayDocument](document: T) extends Response[T]
+  final case class Failure(error: ValidationError) extends Response[Nothing]
+  final case class Success[D <: ReplayDocument](document: D) extends Response[D]
 }
