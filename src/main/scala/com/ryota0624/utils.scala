@@ -2,6 +2,8 @@ package com.ryota0624
 
 import java.time.LocalDateTime
 
+import akka.actor.typed.ActorRef
+
 import scala.concurrent.{ExecutionContext, Future}
 
 trait Encrypted[Decrypted] {
@@ -26,4 +28,19 @@ object ApplicationTimeImpl extends ApplicationTime {
 
 object ApplicationTime {
   def apply(): ApplicationTime = ApplicationTimeImpl
+}
+
+trait ReplayableCommand[D >: ReplayDocument] {
+  def replayTo: ActorRef[Response[D]]
+}
+
+trait ValidationError
+
+trait ReplayDocument
+
+sealed trait Response[D >: ReplayDocument]
+
+object Response {
+  final case class Failure(error: ValidationError) extends Response[Any]
+  final case class Success[T >: ReplayDocument](document: T) extends Response[T]
 }

@@ -16,7 +16,19 @@ object ChatApplication {
 
   final case class ChatRoomsCommand(command: ChatRooms.Command) extends Command
 
+  final case class Response(msg: Users.Response) extends Command
+
   def apply()(implicit time: ApplicationTime): Behavior[Command] = Behaviors.setup { context =>
+    context.self ! ChatApplication.UsersCommand(Users.RegisterAnonymousUser)
+    context.self ! ChatApplication.UsersCommand(Users.RegisterAnonymousUser)
+    context.self ! ChatApplication.UsersCommand(Users.RegisterUser(
+      User.Name("suzuki"),
+      new LoggedInUser.Email("hoge"),
+      new user.LoggedInUser.Password("huga"),
+      context.messageAdapter(Response)
+    )
+    )
+
     def startSubscriber(): Behavior[Any] = Behaviors.setup { subCtx =>
       subCtx.system.eventStream.tell(Subscribe(subCtx.self))
       Behaviors.receiveMessage { message =>
@@ -35,7 +47,9 @@ object ChatApplication {
       case ChatRoomsCommand(command) =>
         chatRooms ! command
         Behaviors.same
-
+      case Response(msg) =>
+        context.log.info(msg.toString)
+        Behaviors.same
     }
   }
 }
@@ -43,12 +57,4 @@ object ChatApplication {
 object CommandLine extends App {
   implicit val applicationTime: ApplicationTime = ApplicationTime()
   val main: ActorSystem[ChatApplication.Command] = ActorSystem(ChatApplication(), "ChatApplication")
-
-  main ! ChatApplication.UsersCommand(Users.RegisterAnonymousUser)
-  main ! ChatApplication.UsersCommand(Users.RegisterAnonymousUser)
-  main ! ChatApplication.UsersCommand(Users.RegisterUser(
-    User.Name("suzuki"),
-    new LoggedInUser.Email("hoge"),
-    new user.LoggedInUser.Password("huga"))
-  )
 }
