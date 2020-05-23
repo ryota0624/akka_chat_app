@@ -13,9 +13,7 @@ class RegisterUserController(
   }
 }
 
-class Router(
-    registerUser: RegisterUserController
-) {
+class Router {
   def handle(request: Any) = {
     trait RequestProviderImpl extends RequestProvider {
       override def provide: Any = request
